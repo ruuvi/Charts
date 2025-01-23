@@ -19,7 +19,12 @@ public protocol Marker: AnyObject
     /// By returning x: -(width / 2) you will center the IMarker horizontally.
     /// By returning y: -(height / 2) you will center the IMarker vertically.
     var offset: CGPoint { get }
-    
+
+    // Ruuvi
+    /// - Returns: The Rect of last drawn Marker.
+    var lastDrawnRect: CGRect { get set }
+    // End Vivaldi
+
     /// - Parameters:
     ///   - point: This is the point at which the marker wants to be drawn. You can adjust the offset conditionally based on this argument.
     /// - Returns: The offset for drawing at the specific `point`.

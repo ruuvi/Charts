@@ -20,7 +20,11 @@ import AppKit
 open class MarkerView: NSUIView, Marker
 {
     open var offset: CGPoint = CGPoint()
-    
+
+    // Ruuvi
+    open var lastDrawnRect: CGRect = CGRect.zero
+    // End Ruuvi
+
     @objc open weak var chartView: ChartViewBase?
     
     open func offsetForDrawing(atPoint point: CGPoint) -> CGPoint

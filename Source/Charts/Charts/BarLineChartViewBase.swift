@@ -541,7 +541,28 @@ open class BarLineChartViewBase: ChartViewBase, BarLineScatterCandleBubbleChartD
             if !isHighLightPerTapEnabled { return }
             
             let h = getHighlightByTouchPoint(recognizer.location(in: self))
-            
+
+            // Ruuvi: Check if marker is tapped, in that case close the marker.
+            if let markerImage = marker as? MarkerImage,
+               markerImage.lastDrawnRect != .zero {
+                let position = recognizer.location(in: self)
+                if markerImage.lastDrawnRect.contains(position) {
+                    lastHighlighted = nil
+                    highlightValue(nil, callDelegate: true)
+                    markerImage.lastDrawnRect = .zero
+                    return
+                }
+            } else if let markerView = marker as? MarkerView,
+                      markerView.lastDrawnRect != .zero {
+                let position = recognizer.location(in: self)
+                if markerView.lastDrawnRect.contains(position) {
+                    lastHighlighted = nil
+                    highlightValue(nil, callDelegate: true)
+                    markerView.lastDrawnRect = .zero
+                    return
+                }
+            } // End Ruuvi
+
             if h === nil || h == self.lastHighlighted
             {
                 lastHighlighted = nil

@@ -19,7 +19,11 @@ open class MarkerImage: NSObject, Marker
     @objc open var image: NSUIImage?
     
     open var offset: CGPoint = CGPoint()
-    
+
+    // Ruuvi
+    open var lastDrawnRect: CGRect = CGRect.zero
+    // End Ruuvi
+
     @objc open weak var chartView: ChartViewBase?
     
     /// As long as size is 0.0/0.0 - it will default to the image's size
