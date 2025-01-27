@@ -331,6 +331,17 @@ open class LineChartRenderer: LineRadarRenderer
 
             for j in _xBounds.dropLast()
             {
+                // Ruuvi
+                guard
+                    let e1 = dataSet.entryForIndex(j),
+                    let e2 = dataSet.entryForIndex(j + 1)
+                else { continue }
+
+                if (e2.x - e1.x) >= dataSet.maximumGapBetweenPoints {
+                    continue
+                }
+                // End Ruuvi
+
                 var e: ChartDataEntry! = dataSet.entryForIndex(j)
                 
                 if e == nil { continue }
@@ -391,129 +402,180 @@ open class LineChartRenderer: LineRadarRenderer
         }
         else
         { // only one color per dataset
-            guard dataSet.entryForIndex(_xBounds.min) != nil else {
-                return
+
+            // Ruuvi
+            let maximumGap = dataSet.maximumGapBetweenPoints
+            guard let firstEntry = dataSet.entryForIndex(_xBounds.min) else { return }
+
+            var path = CGMutablePath()
+            path.move(to: CGPoint(x: CGFloat(firstEntry.x), y: CGFloat(firstEntry.y * phaseY)))
+
+            var prevEntry = firstEntry
+
+            var gapPoints: [ChartDataEntry] = []
+            var justHadGap = false
+
+            for x in stride(from: _xBounds.min + 1, through: _xBounds.min + _xBounds.range, by: 1) {
+                guard let curEntry = dataSet.entryForIndex(x) else { continue }
+
+                let gapSize = curEntry.x - prevEntry.x
+                if maximumGap > 0.0 && gapSize > maximumGap {
+
+                    if justHadGap {
+                        gapPoints.append(prevEntry)
+                    }
+                    justHadGap = true
+
+                    path.move(to: CGPoint(x: CGFloat(curEntry.x),
+                                          y: CGFloat(curEntry.y * phaseY)))
+                }
+                else {
+                    justHadGap = false
+                    path.addLine(to: CGPoint(x: CGFloat(curEntry.x),
+                                             y: CGFloat(curEntry.y * phaseY)))
+                }
+
+                prevEntry = curEntry
             }
 
-            var firstPoint = true
+            // Draw the path
+            context.saveGState()
+            defer { context.restoreGState() }
 
-            let path = CGMutablePath()
-            for x in stride(from: _xBounds.min, through: _xBounds.range + _xBounds.min, by: 1)
-            {
-                guard let e1 = dataSet.entryForIndex(x == 0 ? 0 : (x - 1)) else { continue }
-                guard let e2 = dataSet.entryForIndex(x) else { continue }
-                
-                let startPoint =
-                    CGPoint(
-                        x: CGFloat(e1.x),
-                        y: CGFloat(e1.y * phaseY))
-                    .applying(valueToPixelMatrix)
-                
-                if firstPoint
-                {
-                    path.move(to: startPoint)
-                    firstPoint = false
-                }
-                else
-                {
-                    path.addLine(to: startPoint)
-                }
-                
-                if isDrawSteppedEnabled
-                {
-                    let steppedPoint =
-                        CGPoint(
-                            x: CGFloat(e2.x),
-                            y: CGFloat(e1.y * phaseY))
-                        .applying(valueToPixelMatrix)
-                    path.addLine(to: steppedPoint)
-                }
-
-                let endPoint =
-                    CGPoint(
-                        x: CGFloat(e2.x),
-                        y: CGFloat(e2.y * phaseY))
-                    .applying(valueToPixelMatrix)
-                path.addLine(to: endPoint)
+            // Transform to screen coords
+            let trans = dataProvider.getTransformer(forAxis: dataSet.axisDependency)
+            var transform = trans.valueToPixelMatrix
+            if let newPath = path.copy(using: &transform) {
+                path = newPath.mutableCopy()!
             }
-            
-            if !firstPoint
-            {
-                if dataSet.isDrawLineWithGradientEnabled {
-                    drawGradientLine(context: context, dataSet: dataSet, spline: path, matrix: valueToPixelMatrix)
+            // Stroke the path
+            context.beginPath()
+            context.addPath(path)
+            context.setStrokeColor(dataSet.color(atIndex: 0).cgColor)
+            context.strokePath()
+
+            // === Draw the tiny dot for any gap points
+            context.setFillColor(dataSet.color(atIndex: 0).cgColor)
+            for gapEntry in gapPoints {
+                var pt = CGPoint(x: CGFloat(gapEntry.x), y: CGFloat(gapEntry.y * phaseY))
+                pt = pt.applying(transform)
+                context.fillEllipse(
+                    in: CGRect(
+                        x: pt.x - dataSet.gapCircleRadius,
+                        y: pt.y - dataSet.gapCircleRadius,
+                        width: dataSet.gapCircleRadius,
+                        height: dataSet.gapCircleRadius)
+                )
+            }
+        }
+    }
+    
+    open func drawLinearFill(
+        context: CGContext,
+        dataSet: LineChartDataSetProtocol,
+        trans: Transformer,
+        bounds: XBounds)
+    {
+        guard dataProvider != nil else { return }
+
+        let maximumGap = dataSet.maximumGapBetweenPoints
+
+        let startIndex = bounds.min
+        let endIndex = bounds.min + bounds.range
+
+        let indexInterval = 128
+        var currentStartIndex = startIndex
+
+        for index in stride(from: startIndex+1, through: endIndex, by: 1) {
+            guard
+                let e1 = dataSet.entryForIndex(index-1),
+                let e2 = dataSet.entryForIndex(index)
+            else { continue }
+
+            let gap = e2.x - e1.x
+            let breakInData = (maximumGap > 0.0 && gap > maximumGap)
+
+            if breakInData || (index - currentStartIndex >= indexInterval) || (index == endIndex) {
+                // currentEndIndex is the last valid index of this segment
+                let currentEndIndex = breakInData ? index - 1 : index
+
+                // Build the subpath for [currentStartIndex..currentEndIndex]
+                var subPath = generateFilledPath(
+                    dataSet: dataSet,
+                    startIndex: currentStartIndex,
+                    endIndex: currentEndIndex
+                )
+
+                // Transform to screen coords & draw
+                var t = trans.valueToPixelMatrix
+                if let transformedPath = subPath.copy(using: &t) {
+                    // If you need it mutable:
+                    subPath = transformedPath.mutableCopy()!
+                }
+                if let drawable = dataSet.fill {
+                    drawFilledPath(
+                        context: context,
+                        path: subPath,
+                        fill: drawable,
+                        fillAlpha: dataSet.fillAlpha
+                    )
                 } else {
-                    context.beginPath()
-                    context.addPath(path)
-                    context.setStrokeColor(dataSet.color(atIndex: 0).cgColor)
-                    context.strokePath()
+                    drawFilledPath(
+                        context: context,
+                        path: subPath,
+                        fillColor: dataSet.fillColor,
+                        fillAlpha: dataSet.fillAlpha
+                    )
                 }
+                currentStartIndex = index
             }
         }
     }
-    
-    open func drawLinearFill(context: CGContext, dataSet: LineChartDataSetProtocol, trans: Transformer, bounds: XBounds)
-    {
-        guard let dataProvider = dataProvider else { return }
-        
-        let filled = generateFilledPath(
-            dataSet: dataSet,
-            fillMin: dataSet.fillFormatter?.getFillLinePosition(dataSet: dataSet, dataProvider: dataProvider) ?? 0.0,
-            bounds: bounds,
-            matrix: trans.valueToPixelMatrix)
-        
-        if dataSet.fill != nil
-        {
-            drawFilledPath(context: context, path: filled, fill: dataSet.fill!, fillAlpha: dataSet.fillAlpha)
-        }
-        else
-        {
-            drawFilledPath(context: context, path: filled, fillColor: dataSet.fillColor, fillAlpha: dataSet.fillAlpha)
-        }
-    }
-    
+
     /// Generates the path that is used for filled drawing.
-    private func generateFilledPath(dataSet: LineChartDataSetProtocol, fillMin: CGFloat, bounds: XBounds, matrix: CGAffineTransform) -> CGPath
+    private func generateFilledPath(
+        dataSet: LineChartDataSetProtocol,
+        startIndex: Int,
+        endIndex: Int
+    ) -> CGMutablePath
     {
-        let phaseY = animator.phaseY
-        let isDrawSteppedEnabled = dataSet.mode == .stepped
-        let matrix = matrix
-        
-        var e: ChartDataEntry!
-        
         let filled = CGMutablePath()
-        
-        e = dataSet.entryForIndex(bounds.min)
-        if e != nil
-        {
-            filled.move(to: CGPoint(x: CGFloat(e.x), y: fillMin), transform: matrix)
-            filled.addLine(to: CGPoint(x: CGFloat(e.x), y: CGFloat(e.y * phaseY)), transform: matrix)
-        }
-        
-        // create a new path
-        for x in stride(from: (bounds.min + 1), through: bounds.range + bounds.min, by: 1)
-        {
-            guard let e = dataSet.entryForIndex(x) else { continue }
-            
-            if isDrawSteppedEnabled
-            {
-                guard let ePrev = dataSet.entryForIndex(x-1) else { continue }
-                filled.addLine(to: CGPoint(x: CGFloat(e.x), y: CGFloat(ePrev.y * phaseY)), transform: matrix)
+        guard let firstEntry = dataSet.entryForIndex(startIndex),
+        let dataProvider = dataProvider else { return filled }
+
+        let phaseY = animator.phaseY
+        let fillMin = dataSet.fillFormatter?.getFillLinePosition(
+            dataSet: dataSet, dataProvider: dataProvider
+        ) ?? 0.0
+        let isDrawSteppedEnabled = dataSet.mode == .stepped
+
+        // Start by moving from (x, fillMin) up to the first point
+        filled.move(to: CGPoint(x: CGFloat(firstEntry.x), y: fillMin))
+        filled.addLine(to: CGPoint(x: CGFloat(firstEntry.x), y: CGFloat(firstEntry.y * phaseY)))
+
+        var prevEntry = firstEntry
+        for x in stride(from: startIndex+1, through: endIndex, by: 1) {
+            guard let curEntry = dataSet.entryForIndex(x) else { continue }
+
+            if isDrawSteppedEnabled {
+                filled.addLine(to: CGPoint(x: CGFloat(curEntry.x), y: CGFloat(prevEntry.y * phaseY)))
             }
-            
-            filled.addLine(to: CGPoint(x: CGFloat(e.x), y: CGFloat(e.y * phaseY)), transform: matrix)
+            // Then go up/down to cur.y
+            filled.addLine(to: CGPoint(x: CGFloat(curEntry.x), y: CGFloat(curEntry.y * phaseY)))
+
+            prevEntry = curEntry
         }
-        
-        // close up
-        e = dataSet.entryForIndex(bounds.range + bounds.min)
-        if e != nil
-        {
-            filled.addLine(to: CGPoint(x: CGFloat(e.x), y: fillMin), transform: matrix)
+
+        // Finally close the path back down to fillMin
+        if let lastEntry = dataSet.entryForIndex(endIndex) {
+            filled.addLine(to: CGPoint(x: CGFloat(lastEntry.x), y: fillMin))
         }
         filled.closeSubpath()
         
         return filled
     }
-    
+    // End Ruuvi
+
     open override func drawValues(context: CGContext)
     {
         guard

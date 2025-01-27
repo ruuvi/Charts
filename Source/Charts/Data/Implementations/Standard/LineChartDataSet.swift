@@ -79,7 +79,11 @@ open class LineChartDataSet: LineRadarChartDataSet, LineChartDataSetProtocol
     open var circleHoleRadius = CGFloat(4.0)
     
     open var circleColors = [NSUIColor]()
-    
+
+    /// The radius of the drawn circles for lonely points when there are breaks in
+    /// line due to `maximumGapBetweenPoints`.
+    open var gapCircleRadius: CGFloat = 2.0
+
     /// - Returns: The color at the given index of the DataSet's circle-color array.
     /// Performs a IndexOutOfBounds check by modulus.
     open func getCircleColor(atIndex index: Int) -> NSUIColor?
@@ -138,7 +142,10 @@ open class LineChartDataSet: LineRadarChartDataSet, LineChartDataSetProtocol
     
     /// Line cap type, default is CGLineCap.Butt
     open var lineCapType = CGLineCap.butt
-    
+
+    /// The maximum gap (in x-value distance) above which the line should break.
+    open var maximumGapBetweenPoints: CGFloat = 0.0
+
     /// formatter for customizing the position of the fill-line
     private var _fillFormatter: FillFormatter = DefaultFillFormatter()
     
@@ -164,10 +171,12 @@ open class LineChartDataSet: LineRadarChartDataSet, LineChartDataSetProtocol
         copy.circleHoleColor = circleHoleColor
         copy.circleRadius = circleRadius
         copy.circleHoleRadius = circleHoleRadius
+        copy.gapCircleRadius = gapCircleRadius
         copy.cubicIntensity = cubicIntensity
         copy.lineDashPhase = lineDashPhase
         copy.lineDashLengths = lineDashLengths
         copy.lineCapType = lineCapType
+        copy.maximumGapBetweenPoints = maximumGapBetweenPoints
         copy.drawCirclesEnabled = drawCirclesEnabled
         copy.drawCircleHoleEnabled = drawCircleHoleEnabled
         copy.mode = mode

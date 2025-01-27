@@ -43,7 +43,11 @@ public protocol LineChartDataSetProtocol: LineRadarChartDataSetProtocol
     var circleHoleRadius: CGFloat { get set }
     
     var circleColors: [NSUIColor] { get set }
-    
+
+    /// The radius of the drawn circles for lonely points when there are breaks in
+    /// line due to `maximumGapBetweenPoints`.
+    var gapCircleRadius: CGFloat { get set }
+
     /// - Returns: The color at the given index of the DataSet's circle-color array.
     /// Performs a IndexOutOfBounds check by modulus.
     func getCircleColor(atIndex: Int) -> NSUIColor?
@@ -80,7 +84,10 @@ public protocol LineChartDataSetProtocol: LineRadarChartDataSetProtocol
     
     /// Line cap type, default is CGLineCap.Butt
     var lineCapType: CGLineCap { get set }
-    
+
+    /// The maximum gap (in x-value distance) above which the line should break.
+    var maximumGapBetweenPoints: CGFloat { get set}
+
     /// Sets a custom FillFormatterProtocol to the chart that handles the position of the filled-line for each DataSet. Set this to null to use the default logic.
     var fillFormatter: FillFormatter? { get set }
 }
