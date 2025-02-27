@@ -84,6 +84,10 @@ open class LineChartDataSet: LineRadarChartDataSet, LineChartDataSetProtocol
     /// line due to `maximumGapBetweenPoints`.
     open var gapCircleRadius: CGFloat = 2.0
 
+    /// The width of the drawn line for lonely points when there are breaks in
+    /// line due to `maximumGapBetweenPoints`.
+    open var gapLineWidth: CGFloat = 2.0
+
     /// - Returns: The color at the given index of the DataSet's circle-color array.
     /// Performs a IndexOutOfBounds check by modulus.
     open func getCircleColor(atIndex index: Int) -> NSUIColor?
@@ -172,6 +176,7 @@ open class LineChartDataSet: LineRadarChartDataSet, LineChartDataSetProtocol
         copy.circleRadius = circleRadius
         copy.circleHoleRadius = circleHoleRadius
         copy.gapCircleRadius = gapCircleRadius
+        copy.gapLineWidth = gapLineWidth
         copy.cubicIntensity = cubicIntensity
         copy.lineDashPhase = lineDashPhase
         copy.lineDashLengths = lineDashLengths

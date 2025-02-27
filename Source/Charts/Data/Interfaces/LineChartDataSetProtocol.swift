@@ -48,6 +48,10 @@ public protocol LineChartDataSetProtocol: LineRadarChartDataSetProtocol
     /// line due to `maximumGapBetweenPoints`.
     var gapCircleRadius: CGFloat { get set }
 
+    /// The width of the drawn circles for lonely points when there are breaks in
+    /// line due to `maximumGapBetweenPoints`.
+    var gapLineWidth: CGFloat { get set }
+
     /// - Returns: The color at the given index of the DataSet's circle-color array.
     /// Performs a IndexOutOfBounds check by modulus.
     func getCircleColor(atIndex: Int) -> NSUIColor?

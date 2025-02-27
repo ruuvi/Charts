@@ -453,20 +453,6 @@ open class LineChartRenderer: LineRadarRenderer
             context.addPath(path)
             context.setStrokeColor(dataSet.color(atIndex: 0).cgColor)
             context.strokePath()
-
-            // === Draw the tiny dot for any gap points
-            context.setFillColor(dataSet.color(atIndex: 0).cgColor)
-            for gapEntry in gapPoints {
-                var pt = CGPoint(x: CGFloat(gapEntry.x), y: CGFloat(gapEntry.y * phaseY))
-                pt = pt.applying(transform)
-                context.fillEllipse(
-                    in: CGRect(
-                        x: pt.x - dataSet.gapCircleRadius,
-                        y: pt.y - dataSet.gapCircleRadius,
-                        width: dataSet.gapCircleRadius,
-                        height: dataSet.gapCircleRadius)
-                )
-            }
         }
     }
     
@@ -509,27 +495,110 @@ open class LineChartRenderer: LineRadarRenderer
                 // Transform to screen coords & draw
                 var t = trans.valueToPixelMatrix
                 if let transformedPath = subPath.copy(using: &t) {
-                    // If you need it mutable:
                     subPath = transformedPath.mutableCopy()!
                 }
-                if let drawable = dataSet.fill {
-                    drawFilledPath(
+
+                // Draw a veritcal line from the lone poine to the minY.
+                if currentStartIndex == currentEndIndex {
+                    guard let entry = dataSet.entryForIndex(currentStartIndex),
+                          let dataProvider = dataProvider,
+                          let fillMin = dataSet.fillFormatter?.getFillLinePosition(
+                            dataSet: dataSet, dataProvider: dataProvider
+                          ) else {
+                              continue
+                          }
+
+                    var p1 = CGPoint(x: CGFloat(entry.x), y: fillMin)
+                    var p2 = CGPoint(x: CGFloat(entry.x),
+                                     y: CGFloat(entry.y * animator.phaseY))
+                    // Transform them
+                    p1 = p1.applying(t)
+                    p2 = p2.applying(t)
+
+                    // Draw that lone point line
+                    drawLine(
                         context: context,
-                        path: subPath,
-                        fill: drawable,
-                        fillAlpha: dataSet.fillAlpha
-                    )
-                } else {
-                    drawFilledPath(
-                        context: context,
-                        path: subPath,
+                        start: p1,
+                        stop: p2,
                         fillColor: dataSet.fillColor,
-                        fillAlpha: dataSet.fillAlpha
+                        fillAlpha: dataSet.fillAlpha,
+                        lineWidth: dataSet.gapLineWidth
                     )
+
+                    // Draw a circle at the lone point
+                    drawCircleAtPoint(
+                        context: context,
+                        center: p2,
+                        radius: dataSet.gapCircleRadius,
+                        fillColor: dataSet.color(atIndex: 0),
+                        drawHole: dataSet.isDrawCircleHoleEnabled
+                    )
+
+                } else {
+                    if let drawable = dataSet.fill {
+                        drawFilledPath(
+                            context: context,
+                            path: subPath,
+                            fill: drawable,
+                            fillAlpha: dataSet.fillAlpha
+                        )
+                    } else {
+                        drawFilledPath(
+                            context: context,
+                            path: subPath,
+                            fillColor: dataSet.fillColor,
+                            fillAlpha: dataSet.fillAlpha
+                        )
+                    }
                 }
+
                 currentStartIndex = index
             }
         }
+    }
+
+    /// Draws a line from given start and end point. Used for lone points in a line chart.
+    func drawLine(
+        context: CGContext,
+        start: CGPoint,
+        stop: CGPoint,
+        fillColor: NSUIColor,
+        fillAlpha: CGFloat,
+        lineWidth: CGFloat
+    )
+    {
+        context.saveGState()
+        context.setAlpha(fillAlpha)
+        context.setStrokeColor(fillColor.cgColor)
+        context.setLineWidth(lineWidth)
+
+        context.beginPath()
+        context.move(to: start)
+        context.addLine(to: stop)
+        context.strokePath()
+
+        context.restoreGState()
+    }
+
+    /// Draws a circle at the given point. Used for lone points in a line chart.
+    func drawCircleAtPoint(
+        context: CGContext,
+        center: CGPoint,
+        radius: CGFloat,
+        fillColor: NSUIColor,
+        
+        drawHole: Bool
+    ) {
+        context.saveGState()
+        defer { context.restoreGState() }
+
+        context.setFillColor(fillColor.cgColor)
+        let diameter = radius * 2
+        let circleRect = CGRect(x: center.x - radius,
+                                y: center.y - radius,
+                                width: diameter,
+                                height: diameter)
+        context.fillEllipse(in: circleRect)
     }
 
     /// Generates the path that is used for filled drawing.
