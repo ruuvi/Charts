@@ -248,14 +248,33 @@ open class ViewPortHandler: NSObject
     /// limits the maximum scale and X translation of the given matrix
     private func limitTransAndScale(matrix: inout CGAffineTransform, content: CGRect)
     {
+        // Ruuvi: This patch fixes the issue where scaling/zooming to the any point
+        // to maximum scale would cause the chart to jump and move the point out of the visible area.
+
+        // Store the original scale before limiting
+        let originalScaleX = matrix.a
+        let originalScaleY = matrix.d
+
         // min scale-x is 1
         scaleX = min(max(minScaleX, matrix.a), maxScaleX)
         
         // min scale-y is 1
-        scaleY = min(max(minScaleY,  matrix.d), maxScaleY)
+        scaleY = min(max(minScaleY, matrix.d), maxScaleY)
         
         let width = content.width
         let height = content.height
+
+        // Adjust translation proportionally if scale was limited
+        if scaleX != originalScaleX {
+            // Adjust translation to maintain the same visual center point
+            matrix.tx = matrix.tx * (scaleX / originalScaleX)
+        }
+
+        if scaleY != originalScaleY {
+            // Adjust translation to maintain the same visual center point
+            matrix.ty = matrix.ty * (scaleY / originalScaleY)
+        }
+        // End Ruuvi
 
         let maxTransX = -width * (scaleX - 1.0)
         transX = min(max(matrix.tx, maxTransX - transOffsetX), transOffsetX)
