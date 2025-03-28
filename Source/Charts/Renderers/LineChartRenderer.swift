@@ -421,6 +421,36 @@ open class LineChartRenderer: LineRadarRenderer
                 let gapSize = curEntry.x - prevEntry.x
                 if maximumGap > 0.0 && gapSize > maximumGap {
 
+                    // Draw dashed line to show the trend when there is a gap between points
+                    // bigger than maximumGapBetweenPoints.
+                    context.saveGState()
+                    context.setLineDash(phase: 0, lengths: [1, 2])
+                    context.setStrokeColor(dataSet.color(atIndex: 0).cgColor)
+                    context.setLineWidth(dataSet.lineWidth)
+
+                    // Build a small sub-path from prevEntry -> curEntry
+                    var dashPath = CGMutablePath()
+
+                    dashPath.move(
+                        to: CGPoint(x: CGFloat(prevEntry.x), y: CGFloat(prevEntry.y * phaseY))
+                    )
+                    dashPath.addLine(
+                        to: CGPoint(x: CGFloat(curEntry.x), y: CGFloat(curEntry.y * phaseY))
+                    )
+
+                    // Transform to screen coords
+                    var transform = trans.valueToPixelMatrix
+                    if let dashXformed = dashPath.copy(using: &transform) {
+                        dashPath = dashXformed.mutableCopy()!
+                    }
+
+                    context.beginPath()
+                    context.addPath(dashPath)
+                    context.strokePath()
+
+                    // Restore
+                    context.restoreGState()
+
                     if justHadGap {
                         gapPoints.append(prevEntry)
                     }
