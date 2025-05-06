@@ -294,198 +294,515 @@ open class LineChartRenderer: LineRadarRenderer
     }
     
     private var _lineSegments = [CGPoint](repeating: CGPoint(), count: 2)
-    
-    @objc open func drawLinear(context: CGContext, dataSet: LineChartDataSetProtocol)
+
+    // Ruuvi
+    // MARK: - Linear drawing (alert‑range aware)
+    @objc open func drawLinear(
+        context: CGContext,
+        dataSet: LineChartDataSetProtocol
+    )
     {
-        guard let dataProvider = dataProvider else { return }
-        
+        let extraPadding: CGFloat = 20.0
+        guard let dataProvider = dataProvider,
+              dataSet.entryCount > 0 else { return }
+
+        // Common constants
         let trans = dataProvider.getTransformer(forAxis: dataSet.axisDependency)
-        
-        let valueToPixelMatrix = trans.valueToPixelMatrix
-        
-        let entryCount = dataSet.entryCount
-        let isDrawSteppedEnabled = dataSet.mode == .stepped
-        let pointsPerEntryPair = isDrawSteppedEnabled ? 4 : 2
-        
+        let toPixel = trans.valueToPixelMatrix
         let phaseY = animator.phaseY
-        
+        let maxGap = dataSet.maximumGapBetweenPoints
+
+        // If no alert range is set, draw normally
+        if !dataSet.hasAlertRange {
+            drawLinearWithoutAlert(
+                context: context,
+                dataSet: dataSet,
+                trans: trans,
+                toPixel: toPixel,
+                phaseY: phaseY,
+                maxGap: maxGap
+            )
+            return
+        }
+
+        // Alert band parameters
+        let alertColor = dataSet.alertColor
+        let normalColor = dataSet.color(atIndex: 0)
+        let lower = dataSet.lowerAlertLimit
+        let upper = dataSet.upperAlertLimit
+
+        // ──────────────────────────────
+        // Performance optimization: Only draw what's visible plus margins
+        // ──────────────────────────────
+
+        // Find visible x-range in chart coordinates
+        let visibleMinX = Double(trans.pixelForValues(x: 0, y: 0).x - extraPadding)
+        let visibleMaxX = Double(trans.pixelForValues(x: 0, y: 0).x + extraPadding)
+
+        // Set bounds to just visible area plus some margin for smooth scrolling
         _xBounds.set(chart: dataProvider, dataSet: dataSet, animator: animator)
-        
-        // if drawing filled is enabled
-        if dataSet.isDrawFilledEnabled && entryCount > 0
-        {
-            drawLinearFill(context: context, dataSet: dataSet, trans: trans, bounds: _xBounds)
+
+        // Find actual indices to draw based on visibility
+        var drawStartIdx = _xBounds.min
+        var drawEndIdx = _xBounds.min + _xBounds.range
+
+        // Find more precise start index (optimization for large datasets)
+        while drawStartIdx > 0, let entry = dataSet.entryForIndex(drawStartIdx - 1), Double(entry.x) >= Double(visibleMinX) {
+            drawStartIdx -= 1
         }
-        
-        context.saveGState()
-        defer { context.restoreGState() }
 
-        // more than 1 color
-        if dataSet.colors.count > 1, !dataSet.isDrawLineWithGradientEnabled
-        {
-            if _lineSegments.count != pointsPerEntryPair
-            {
-                // Allocate once in correct size
-                _lineSegments = [CGPoint](repeating: CGPoint(), count: pointsPerEntryPair)
-            }
-
-            for j in _xBounds.dropLast()
-            {
-                // Ruuvi
-                guard
-                    let e1 = dataSet.entryForIndex(j),
-                    let e2 = dataSet.entryForIndex(j + 1)
-                else { continue }
-
-                if (e2.x - e1.x) >= dataSet.maximumGapBetweenPoints {
-                    continue
-                }
-                // End Ruuvi
-
-                var e: ChartDataEntry! = dataSet.entryForIndex(j)
-                
-                if e == nil { continue }
-                
-                _lineSegments[0].x = CGFloat(e.x)
-                _lineSegments[0].y = CGFloat(e.y * phaseY)
-                
-                if j < _xBounds.max
-                {
-                    // TODO: remove the check.
-                    // With the new XBounds iterator, j is always smaller than _xBounds.max
-                    // Keeping this check for a while, if xBounds have no further breaking changes, it should be safe to remove the check
-                    e = dataSet.entryForIndex(j + 1)
-                    
-                    if e == nil { break }
-                    
-                    if isDrawSteppedEnabled
-                    {
-                        _lineSegments[1] = CGPoint(x: CGFloat(e.x), y: _lineSegments[0].y)
-                        _lineSegments[2] = _lineSegments[1]
-                        _lineSegments[3] = CGPoint(x: CGFloat(e.x), y: CGFloat(e.y * phaseY))
-                    }
-                    else
-                    {
-                        _lineSegments[1] = CGPoint(x: CGFloat(e.x), y: CGFloat(e.y * phaseY))
-                    }
-                }
-                else
-                {
-                    _lineSegments[1] = _lineSegments[0]
-                }
-
-                _lineSegments = _lineSegments.map { $0.applying(valueToPixelMatrix) }
-
-                if (!viewPortHandler.isInBoundsRight(_lineSegments[0].x))
-                {
-                    break
-                }
-
-                // Determine the start and end coordinates of the line, and make sure they differ.
-                guard
-                    let firstCoordinate = _lineSegments.first,
-                    let lastCoordinate = _lineSegments.last,
-                    firstCoordinate != lastCoordinate else { continue }
-                
-                // make sure the lines don't do shitty things outside bounds
-                if !viewPortHandler.isInBoundsLeft(lastCoordinate.x) ||
-                    !viewPortHandler.isInBoundsTop(max(firstCoordinate.y, lastCoordinate.y)) ||
-                    !viewPortHandler.isInBoundsBottom(min(firstCoordinate.y, lastCoordinate.y))
-                {
-                    continue
-                }
-                
-                // get the color that is set for this line-segment
-                context.setStrokeColor(dataSet.color(atIndex: j).cgColor)
-                context.strokeLineSegments(between: _lineSegments)
-            }
+        // Find more precise end index
+        while drawEndIdx < dataSet.entryCount - 1, let entry = dataSet.entryForIndex(drawEndIdx + 1), Double(entry.x) <= Double(visibleMaxX) {
+            drawEndIdx += 1
         }
-        else
-        { // only one color per dataset
 
-            // Ruuvi
-            let maximumGap = dataSet.maximumGapBetweenPoints
-            guard let firstEntry = dataSet.entryForIndex(_xBounds.min) else { return }
+        // Add a couple more points on each side to ensure smooth transitions
+        drawStartIdx = max(0, drawStartIdx - 2)
+        drawEndIdx = min(dataSet.entryCount - 1, drawEndIdx + 2)
 
-            var path = CGMutablePath()
-            path.move(to: CGPoint(x: CGFloat(firstEntry.x), y: CGFloat(firstEntry.y * phaseY)))
+        guard drawEndIdx >= drawStartIdx,
+              let firstEntry = dataSet.entryForIndex(drawStartIdx),
+              let lastEntry = dataSet.entryForIndex(drawEndIdx) else { return }
+
+        // ──────────────────────────────
+        // Pre-calculate reusable values
+        // ──────────────────────────────
+        let axisMinimum = dataProvider.getAxis(dataSet.axisDependency).axisMinimum
+        let upperInAlert = !upper.isNaN
+        let lowerInAlert = !lower.isNaN
+        let baselineY = CGFloat(axisMinimum)
+
+        // Pre-calculate transformed threshold points
+        let upperPoint = upperInAlert ? CGPoint(x: 0, y: upper).applying(toPixel) : CGPoint.zero
+        let lowerPoint = lowerInAlert ? CGPoint(x: 0, y: lower).applying(toPixel) : CGPoint.zero
+        let y_upper_pixel = upperPoint.y
+        let y_lower_pixel = lowerPoint.y
+
+        // Extended content area
+        let extendedLeft = viewPortHandler.contentLeft - extraPadding
+        let extendedRight = viewPortHandler.contentRight + extraPadding
+        let extendedWidth = extendedRight - extendedLeft
+
+        // ──────────────────────────────
+        // 1. Build the full fill path (once)
+        // ──────────────────────────────
+        let fullFillPath = autoreleasepool { () -> CGPath in
+            let path = CGMutablePath()
+            path.move(to: CGPoint(x: CGFloat(firstEntry.x),
+                                  y: CGFloat(firstEntry.y * phaseY)))
 
             var prevEntry = firstEntry
+            var prevX = firstEntry.x
 
-            var gapPoints: [ChartDataEntry] = []
-            var justHadGap = false
+            for idx in stride(from: drawStartIdx + 1, through: drawEndIdx, by: 1) {
+                guard let cur = dataSet.entryForIndex(idx) else { continue }
 
-            for x in stride(from: _xBounds.min + 1, through: _xBounds.min + _xBounds.range, by: 1) {
-                guard let curEntry = dataSet.entryForIndex(x) else { continue }
+                // Skip duplicates for performance
+                guard cur.x > prevX else { continue }
+                prevX = cur.x
 
-                let gapSize = curEntry.x - prevEntry.x
-                if maximumGap > 0.0 && gapSize > maximumGap {
-
-                    // Draw dashed line to show the trend when there is a gap between points
-                    // bigger than maximumGapBetweenPoints.
-                    context.saveGState()
-                    context.setLineDash(phase: 0, lengths: [1, 2])
-                    context.setStrokeColor(dataSet.color(atIndex: 0).cgColor)
-                    context.setLineWidth(dataSet.lineWidth)
-
-                    // Build a small sub-path from prevEntry -> curEntry
-                    var dashPath = CGMutablePath()
-
-                    dashPath.move(
-                        to: CGPoint(x: CGFloat(prevEntry.x), y: CGFloat(prevEntry.y * phaseY))
-                    )
-                    dashPath.addLine(
-                        to: CGPoint(x: CGFloat(curEntry.x), y: CGFloat(curEntry.y * phaseY))
-                    )
-
-                    // Transform to screen coords
-                    var transform = trans.valueToPixelMatrix
-                    if let dashXformed = dashPath.copy(using: &transform) {
-                        dashPath = dashXformed.mutableCopy()!
-                    }
-
-                    context.beginPath()
-                    context.addPath(dashPath)
-                    context.strokePath()
-
-                    // Restore
-                    context.restoreGState()
-
-                    if justHadGap {
-                        gapPoints.append(prevEntry)
-                    }
-                    justHadGap = true
-
-                    path.move(to: CGPoint(x: CGFloat(curEntry.x),
-                                          y: CGFloat(curEntry.y * phaseY)))
-                }
-                else {
-                    justHadGap = false
-                    path.addLine(to: CGPoint(x: CGFloat(curEntry.x),
-                                             y: CGFloat(curEntry.y * phaseY)))
+                if maxGap > 0, cur.x - prevEntry.x > maxGap {
+                    // Draw dashed hint for gaps (handled separately below for better performance)
+                    path.addLine(to: CGPoint(x: CGFloat(cur.x),
+                                             y: CGFloat(cur.y * phaseY)))
+                } else {
+                    path.addLine(to: CGPoint(x: CGFloat(cur.x),
+                                             y: CGFloat(cur.y * phaseY)))
                 }
 
-                prevEntry = curEntry
+                prevEntry = cur
             }
 
-            // Draw the path
+            // Close the path to baseline and back
+            path.addLine(to: CGPoint(x: CGFloat(lastEntry.x), y: baselineY))
+            path.addLine(to: CGPoint(x: CGFloat(firstEntry.x), y: baselineY))
+            path.closeSubpath()
+
+            // Transform only once
+            var m = toPixel
+            guard let transformed = path.copy(using: &m) else { return path }
+            return transformed
+        }
+
+        // ──────────────────────────────
+        // 2. Draw fills using clipping regions (only when needed)
+        // ──────────────────────────────
+        if dataSet.isDrawFilledEnabled {
+
+            // Draw alert regions (above upper and below lower)
+            if (upperInAlert || lowerInAlert) {
+                context.saveGState()
+
+                // Create unified alert clipping region when possible
+                if upperInAlert && lowerInAlert {
+                    let aboveClipRect = CGRect(x: extendedLeft,
+                                              y: viewPortHandler.contentTop,
+                                              width: extendedWidth,
+                                              height: y_upper_pixel - viewPortHandler.contentTop)
+
+                    let belowClipRect = CGRect(x: extendedLeft,
+                                              y: y_lower_pixel,
+                                              width: extendedWidth,
+                                              height: viewPortHandler.contentBottom - y_lower_pixel)
+
+                    // Create combined path for both alert regions
+                    if aboveClipRect.height > 0 && belowClipRect.height > 0 {
+                        let combinedClipPath = CGMutablePath()
+                        combinedClipPath.addRect(aboveClipRect)
+                        combinedClipPath.addRect(belowClipRect)
+                        context.addPath(combinedClipPath)
+                        context.clip()
+
+                        // Single draw call for both regions
+                        if let fill = dataSet.fill {
+                            drawFilledPath(context: context,
+                                          path: fullFillPath,
+                                          fill: fill,
+                                          fillAlpha: dataSet.fillAlpha)
+                        } else {
+                            drawFilledPath(context: context,
+                                          path: fullFillPath,
+                                          fillColor: alertColor,
+                                          fillAlpha: dataSet.fillAlpha)
+                        }
+                    }
+                } else {
+                    // Only one threshold - simpler case
+                    let alertClipRect: CGRect
+                    if upperInAlert {
+                        alertClipRect = CGRect(x: extendedLeft,
+                                              y: viewPortHandler.contentTop,
+                                              width: extendedWidth,
+                                              height: y_upper_pixel - viewPortHandler.contentTop)
+                    } else {
+                        alertClipRect = CGRect(x: extendedLeft,
+                                              y: y_lower_pixel,
+                                              width: extendedWidth,
+                                              height: viewPortHandler.contentBottom - y_lower_pixel)
+                    }
+
+                    if alertClipRect.height > 0 {
+                        context.clip(to: alertClipRect)
+                        if let fill = dataSet.fill {
+                            drawFilledPath(context: context,
+                                          path: fullFillPath,
+                                          fill: fill,
+                                          fillAlpha: dataSet.fillAlpha)
+                        } else {
+                            drawFilledPath(context: context,
+                                          path: fullFillPath,
+                                          fillColor: alertColor,
+                                          fillAlpha: dataSet.fillAlpha)
+                        }
+                    }
+                }
+
+                context.restoreGState()
+            }
+
+            // Draw normal region
+            if (upperInAlert && lowerInAlert) || (upperInAlert || lowerInAlert) {
+                context.saveGState()
+
+                let normalClipRect: CGRect
+                if upperInAlert && lowerInAlert {
+                    // Between thresholds
+                    normalClipRect = CGRect(x: extendedLeft,
+                                           y: y_upper_pixel,
+                                           width: extendedWidth,
+                                           height: y_lower_pixel - y_upper_pixel)
+                } else if upperInAlert {
+                    // Below upper threshold
+                    normalClipRect = CGRect(x: extendedLeft,
+                                           y: y_upper_pixel,
+                                           width: extendedWidth,
+                                           height: viewPortHandler.contentBottom - y_upper_pixel)
+                } else {
+                    // Above lower threshold
+                    normalClipRect = CGRect(x: extendedLeft,
+                                           y: viewPortHandler.contentTop,
+                                           width: extendedWidth,
+                                           height: y_lower_pixel - viewPortHandler.contentTop)
+                }
+
+                if normalClipRect.height > 0 {
+                    context.clip(to: normalClipRect)
+                    if let fill = dataSet.fill {
+                        drawFilledPath(context: context,
+                                      path: fullFillPath,
+                                      fill: fill,
+                                      fillAlpha: dataSet.fillAlpha)
+                    } else {
+                        drawFilledPath(context: context,
+                                      path: fullFillPath,
+                                      fillColor: normalColor,
+                                      fillAlpha: dataSet.fillAlpha)
+                    }
+                }
+
+                context.restoreGState()
+            }
+        }
+
+        // ──────────────────────────────
+        // 3. Draw threshold lines (performance: use single call when possible)
+        // ──────────────────────────────
+        if upperInAlert || lowerInAlert {
             context.saveGState()
-            defer { context.restoreGState() }
+            context.setStrokeColor(alertColor.cgColor)
+            context.setLineWidth(1.0)
 
-            // Transform to screen coords
-            let trans = dataProvider.getTransformer(forAxis: dataSet.axisDependency)
-            var transform = trans.valueToPixelMatrix
-            if let newPath = path.copy(using: &transform) {
-                path = newPath.mutableCopy()!
+            // Draw both lines in a single stroke operation if possible
+            if upperInAlert && lowerInAlert &&
+               viewPortHandler.isInBoundsY(y_upper_pixel) &&
+               viewPortHandler.isInBoundsY(y_lower_pixel) {
+
+                let linesPath = CGMutablePath()
+                linesPath.move(to: CGPoint(x: extendedLeft, y: y_upper_pixel))
+                linesPath.addLine(to: CGPoint(x: extendedRight, y: y_upper_pixel))
+                linesPath.move(to: CGPoint(x: extendedLeft, y: y_lower_pixel))
+                linesPath.addLine(to: CGPoint(x: extendedRight, y: y_lower_pixel))
+                context.addPath(linesPath)
+                context.strokePath()
+            } else {
+                // Draw lines individually
+                if upperInAlert && viewPortHandler.isInBoundsY(y_upper_pixel) {
+                    context.move(to: CGPoint(x: extendedLeft, y: y_upper_pixel))
+                    context.addLine(to: CGPoint(x: extendedRight, y: y_upper_pixel))
+                    context.strokePath()
+                }
+
+                if lowerInAlert && viewPortHandler.isInBoundsY(y_lower_pixel) {
+                    context.move(to: CGPoint(x: extendedLeft, y: y_lower_pixel))
+                    context.addLine(to: CGPoint(x: extendedRight, y: y_lower_pixel))
+                    context.strokePath()
+                }
             }
-            // Stroke the path
-            context.beginPath()
-            context.addPath(path)
-            context.setStrokeColor(dataSet.color(atIndex: 0).cgColor)
-            context.strokePath()
+
+            context.restoreGState()
+        }
+
+        // ──────────────────────────────
+        // 4. Efficiently draw line segments
+        // ──────────────────────────────
+
+        // Reusable arrays for segment drawing (avoid repeated allocations)
+        var normalSegments: [CGPoint] = []
+        var alertSegments: [CGPoint] = []
+        normalSegments.reserveCapacity(50) // Pre-allocate reasonable capacity
+        alertSegments.reserveCapacity(50)
+
+        // Pre-calculate segments and categorize by color
+        autoreleasepool {
+            for idx in stride(from: drawStartIdx, through: drawEndIdx - 1, by: 1) {
+                guard let e1 = dataSet.entryForIndex(idx),
+                      let e2 = dataSet.entryForIndex(idx + 1) else {
+                    continue
+                }
+
+                // Skip large gaps (will be handled by dashed lines)
+                if maxGap > 0, (e2.x - e1.x) > maxGap {
+                    continue
+                }
+
+                // Convert to screen points
+                let p1 = CGPoint(x: CGFloat(e1.x), y: CGFloat(e1.y * phaseY)).applying(toPixel)
+                let p2 = CGPoint(x: CGFloat(e2.x), y: CGFloat(e2.y * phaseY)).applying(toPixel)
+
+                // Skip if completely outside viewport (with margin)
+                let minX = min(p1.x, p2.x)
+                let maxX = max(p1.x, p2.x)
+                if maxX < extendedLeft || minX > extendedRight {
+                    continue
+                }
+
+                // Check alert status
+                let a1 = (upperInAlert && e1.y > upper) || (lowerInAlert && e1.y < lower)
+                let a2 = (upperInAlert && e2.y > upper) || (lowerInAlert && e2.y < lower)
+
+                // Same state - add to appropriate segment array
+                if a1 == a2 {
+                    if a1 {
+                        alertSegments.append(p1)
+                        alertSegments.append(p2)
+                    } else {
+                        normalSegments.append(p1)
+                        normalSegments.append(p2)
+                    }
+                    continue
+                }
+
+                // If crossing threshold, split the segment
+                var limitY: Double = .nan
+                if upperInAlert && (e1.y - upper) * (e2.y - upper) < 0 {
+                    limitY = upper
+                } else if lowerInAlert && (e1.y - lower) * (e2.y - lower) < 0 {
+                    limitY = lower
+                }
+
+                if limitY.isFinite {
+                    // Calculate intersection
+                    let dy = e2.y - e1.y
+                    if abs(dy) >= 1e-6 {  // Avoid division by near-zero
+                        let t = (limitY - e1.y) / dy
+                        if t > 0 && t < 1 {  // Valid intersection point
+                            let xI = e1.x + t * (e2.x - e1.x)
+                            let pI = CGPoint(x: CGFloat(xI), y: CGFloat(limitY * phaseY)).applying(toPixel)
+
+                            // Add segments with appropriate colors
+                            if (upperInAlert && e1.y > upper) || (lowerInAlert && e1.y < lower) {
+                                alertSegments.append(p1)
+                                alertSegments.append(pI)
+                                normalSegments.append(pI)
+                                normalSegments.append(p2)
+                            } else {
+                                normalSegments.append(p1)
+                                normalSegments.append(pI)
+                                alertSegments.append(pI)
+                                alertSegments.append(p2)
+                            }
+                            continue
+                        }
+                    }
+                }
+
+                // Fallback (should rarely happen)
+                normalSegments.append(p1)
+                normalSegments.append(p2)
+            }
+        }
+
+        // Draw segments in batches (more efficient than one-by-one)
+        context.saveGState()
+
+        // Draw normal segments
+        if !normalSegments.isEmpty {
+            context.setStrokeColor(normalColor.cgColor)
+            context.setLineWidth(dataSet.lineWidth)
+            context.strokeLineSegments(between: normalSegments)
+        }
+
+        // Draw alert segments
+        if !alertSegments.isEmpty {
+            context.setStrokeColor(alertColor.cgColor)
+            context.setLineWidth(dataSet.lineWidth)
+            context.strokeLineSegments(between: alertSegments)
+        }
+
+        context.restoreGState()
+
+        // ──────────────────────────────
+        // 5. Draw dashed lines for gaps (if needed)
+        // ──────────────────────────────
+        if maxGap > 0 {
+            var dashSegments: [CGPoint] = []
+
+            for idx in stride(from: drawStartIdx, to: drawEndIdx, by: 1) {
+                guard let e1 = dataSet.entryForIndex(idx),
+                      let e2 = dataSet.entryForIndex(idx + 1) else { continue }
+
+                if e2.x - e1.x > maxGap {
+                    let p1 = CGPoint(x: CGFloat(e1.x), y: CGFloat(e1.y * phaseY)).applying(toPixel)
+                    let p2 = CGPoint(x: CGFloat(e2.x), y: CGFloat(e2.y * phaseY)).applying(toPixel)
+
+                    // Only add if visible
+                    let minX = min(p1.x, p2.x)
+                    let maxX = max(p1.x, p2.x)
+                    if maxX >= extendedLeft && minX <= extendedRight {
+                        dashSegments.append(p1)
+                        dashSegments.append(p2)
+                    }
+                }
+            }
+
+            if !dashSegments.isEmpty {
+                context.saveGState()
+                context.setLineDash(phase: 0, lengths: [1, 2])
+                context.setLineWidth(dataSet.lineWidth)
+                context.setStrokeColor(normalColor.cgColor)
+                context.strokeLineSegments(between: dashSegments)
+                context.restoreGState()
+            }
         }
     }
-    
+
+    // Draws the original single‑colour chart when no limits are set.
+    private func drawLinearWithoutAlert(context: CGContext,
+                                        dataSet: LineChartDataSetProtocol,
+                                        trans: Transformer,
+                                        toPixel: CGAffineTransform,
+                                        phaseY: CGFloat,
+                                        maxGap: Double)
+    {
+        _xBounds.set(chart: dataProvider!, dataSet: dataSet, animator: animator)
+
+        // filled area (unchanged stock helper)
+        if dataSet.isDrawFilledEnabled, dataSet.entryCount > 0 {
+            drawLinearFill(context: context,
+                           dataSet: dataSet,
+                           trans: trans,
+                           bounds: _xBounds)
+        }
+
+        guard let firstEntry = dataSet.entryForIndex(_xBounds.min) else { return }
+
+        var path = CGMutablePath()
+        path.move(to: CGPoint(x: CGFloat(firstEntry.x),
+                              y: CGFloat(firstEntry.y * phaseY)))
+
+        var prevEntry = firstEntry
+
+        for idx in stride(from: _xBounds.min + 1,
+                          through: _xBounds.min + _xBounds.range,
+                          by: 1) {
+            guard let cur = dataSet.entryForIndex(idx) else { continue }
+
+            let gap = cur.x - prevEntry.x
+            if maxGap > 0, gap > maxGap {
+                // dashed hint
+                context.saveGState()
+                context.setLineDash(phase: 0, lengths: [1, 2])
+                context.setLineWidth(dataSet.lineWidth)
+                context.setStrokeColor(dataSet.color(atIndex: 0).cgColor)
+
+                var dash = CGMutablePath()
+                dash.move(to: CGPoint(x: CGFloat(prevEntry.x),
+                                      y: CGFloat(prevEntry.y * phaseY)))
+                dash.addLine(to: CGPoint(x: CGFloat(cur.x),
+                                         y: CGFloat(cur.y * phaseY)))
+                var m = toPixel
+                if let x = dash.copy(using: &m) { dash = x.mutableCopy()! }
+                context.beginPath()
+                context.addPath(dash)
+                context.strokePath()
+                context.restoreGState()
+
+                // restart segment at cur
+                prevEntry = cur
+                path.move(to: CGPoint(x: CGFloat(cur.x),
+                                      y: CGFloat(cur.y * phaseY)))
+                continue
+            }
+
+            path.addLine(to: CGPoint(x: CGFloat(cur.x),
+                                     y: CGFloat(cur.y * phaseY)))
+            prevEntry = cur
+        }
+
+        // stroke the accumulated path
+        var m = toPixel                   // make mutable copy
+        if let x = path.copy(using: &m) {    // use &m, not &toPixel
+            path = x.mutableCopy()!
+        }
+        context.saveGState()
+        context.setLineWidth(dataSet.lineWidth)
+        context.setStrokeColor(dataSet.color(atIndex: 0).cgColor)
+        context.beginPath()
+        context.addPath(path)
+        context.strokePath()
+        context.restoreGState()
+    }
+
     open func drawLinearFill(
         context: CGContext,
         dataSet: LineChartDataSetProtocol,

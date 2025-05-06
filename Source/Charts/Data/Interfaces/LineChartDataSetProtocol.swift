@@ -92,6 +92,18 @@ public protocol LineChartDataSetProtocol: LineRadarChartDataSetProtocol
     /// The maximum gap (in x-value distance) above which the line should break.
     var maximumGapBetweenPoints: CGFloat { get set}
 
+    /// Whether alert is enabled and the alert range should be drawn.
+    var hasAlertRange: Bool { get set }
+
+    /// Optional lower bound – any value **below** this is rendered with `alertColor`.
+    var lowerAlertLimit: CGFloat { get set }
+
+    /// Optional upper bound – any value **above** this is rendered with `alertColor`.
+    var upperAlertLimit: CGFloat { get set }
+
+    /// Stroke & fill colour applied to out‑of‑range segments.
+    var alertColor: NSUIColor { get set }
+
     /// Sets a custom FillFormatterProtocol to the chart that handles the position of the filled-line for each DataSet. Set this to null to use the default logic.
     var fillFormatter: FillFormatter? { get set }
 }

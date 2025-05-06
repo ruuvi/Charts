@@ -150,6 +150,18 @@ open class LineChartDataSet: LineRadarChartDataSet, LineChartDataSetProtocol
     /// The maximum gap (in x-value distance) above which the line should break.
     open var maximumGapBetweenPoints: CGFloat = 0.0
 
+    /// Whether alert is enabled and the alert range should be drawn.
+    open var hasAlertRange = false
+
+    /// Optional lower bound – any value **below** this is rendered with `alertColor`.
+    open var lowerAlertLimit: CGFloat = 0
+
+    /// Optional upper bound – any value **above** this is rendered with `alertColor`.
+    open var upperAlertLimit: CGFloat = 0
+
+    /// Stroke & fill colour applied to out‑of‑range segments.
+    open var alertColor: NSUIColor = .clear
+
     /// formatter for customizing the position of the fill-line
     private var _fillFormatter: FillFormatter = DefaultFillFormatter()
     
@@ -184,6 +196,10 @@ open class LineChartDataSet: LineRadarChartDataSet, LineChartDataSetProtocol
         copy.maximumGapBetweenPoints = maximumGapBetweenPoints
         copy.drawCirclesEnabled = drawCirclesEnabled
         copy.drawCircleHoleEnabled = drawCircleHoleEnabled
+        copy.hasAlertRange = hasAlertRange
+        copy.lowerAlertLimit = lowerAlertLimit
+        copy.upperAlertLimit = upperAlertLimit
+        copy.alertColor = alertColor
         copy.mode = mode
         copy._fillFormatter = _fillFormatter
         return copy
