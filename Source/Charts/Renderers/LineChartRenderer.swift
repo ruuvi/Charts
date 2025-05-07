@@ -296,12 +296,11 @@ open class LineChartRenderer: LineRadarRenderer
     private var _lineSegments = [CGPoint](repeating: CGPoint(), count: 2)
 
     // Ruuvi
-    // MARK: - Linear drawing (alert‑range aware)
     @objc open func drawLinear(
         context: CGContext,
         dataSet: LineChartDataSetProtocol
-    )
-    {
+    ) {
+        // Constants and early returns remain the same
         let extraPadding: CGFloat = 20.0
         guard let dataProvider = dataProvider,
               dataSet.entryCount > 0 else { return }
@@ -312,7 +311,7 @@ open class LineChartRenderer: LineRadarRenderer
         let phaseY = animator.phaseY
         let maxGap = dataSet.maximumGapBetweenPoints
 
-        // If no alert range is set, draw normally
+        // If no alert range is set, delegate to standard drawing method
         if !dataSet.hasAlertRange {
             drawLinearWithoutAlert(
                 context: context,
@@ -331,331 +330,264 @@ open class LineChartRenderer: LineRadarRenderer
         let lower = dataSet.lowerAlertLimit
         let upper = dataSet.upperAlertLimit
 
-        // ──────────────────────────────
-        // Performance optimization: Only draw what's visible plus margins
-        // ──────────────────────────────
+        // Pre-calculate alert check functions for better performance
+        let upperInAlert = !upper.isNaN
+        let lowerInAlert = !lower.isNaN
+        let isInAlertRange: (Double) -> Bool = { y in
+            return (upperInAlert && y > upper) || (lowerInAlert && y < lower)
+        }
 
-        // Find visible x-range in chart coordinates
+        // Performance optimization: Only draw what's visible plus margins
         let visibleMinX = Double(trans.pixelForValues(x: 0, y: 0).x - extraPadding)
         let visibleMaxX = Double(trans.pixelForValues(x: 0, y: 0).x + extraPadding)
 
-        // Set bounds to just visible area plus some margin for smooth scrolling
         _xBounds.set(chart: dataProvider, dataSet: dataSet, animator: animator)
 
-        // Find actual indices to draw based on visibility
         var drawStartIdx = _xBounds.min
         var drawEndIdx = _xBounds.min + _xBounds.range
 
-        // Find more precise start index (optimization for large datasets)
-        while drawStartIdx > 0, let entry = dataSet.entryForIndex(drawStartIdx - 1), Double(entry.x) >= Double(visibleMinX) {
+        // Find more precise start and end indices
+        while drawStartIdx > 0, let entry = dataSet.entryForIndex(drawStartIdx - 1), Double(entry.x) >= visibleMinX {
             drawStartIdx -= 1
         }
-
-        // Find more precise end index
-        while drawEndIdx < dataSet.entryCount - 1, let entry = dataSet.entryForIndex(drawEndIdx + 1), Double(entry.x) <= Double(visibleMaxX) {
+        while drawEndIdx < dataSet.entryCount - 1, let entry = dataSet.entryForIndex(drawEndIdx + 1), Double(entry.x) <= visibleMaxX {
             drawEndIdx += 1
         }
-
-        // Add a couple more points on each side to ensure smooth transitions
         drawStartIdx = max(0, drawStartIdx - 2)
         drawEndIdx = min(dataSet.entryCount - 1, drawEndIdx + 2)
 
-        guard drawEndIdx >= drawStartIdx,
-              let firstEntry = dataSet.entryForIndex(drawStartIdx),
-              let lastEntry = dataSet.entryForIndex(drawEndIdx) else { return }
+        guard drawEndIdx >= drawStartIdx else { return }
 
-        // ──────────────────────────────
         // Pre-calculate reusable values
-        // ──────────────────────────────
         let axisMinimum = dataProvider.getAxis(dataSet.axisDependency).axisMinimum
-        let upperInAlert = !upper.isNaN
-        let lowerInAlert = !lower.isNaN
         let baselineY = CGFloat(axisMinimum)
 
-        // Pre-calculate transformed threshold points
+        // Calculate threshold positions in pixel coordinates - do this once
         let upperPoint = upperInAlert ? CGPoint(x: 0, y: upper).applying(toPixel) : CGPoint.zero
         let lowerPoint = lowerInAlert ? CGPoint(x: 0, y: lower).applying(toPixel) : CGPoint.zero
         let y_upper_pixel = upperPoint.y
         let y_lower_pixel = lowerPoint.y
 
-        // Extended content area
         let extendedLeft = viewPortHandler.contentLeft - extraPadding
         let extendedRight = viewPortHandler.contentRight + extraPadding
         let extendedWidth = extendedRight - extendedLeft
 
-        // ──────────────────────────────
-        // 1. Build the full fill path (once)
-        // ──────────────────────────────
-        let fullFillPath = autoreleasepool { () -> CGPath in
-            let path = CGMutablePath()
-            path.move(to: CGPoint(x: CGFloat(firstEntry.x),
-                                  y: CGFloat(firstEntry.y * phaseY)))
+        // Identify continuous segments and lone points
+        var segments: [(startIdx: Int, endIdx: Int)] = []
+        segments.reserveCapacity(min(20, drawEndIdx - drawStartIdx + 1)) // Better capacity estimation
 
-            var prevEntry = firstEntry
-            var prevX = firstEntry.x
-
-            for idx in stride(from: drawStartIdx + 1, through: drawEndIdx, by: 1) {
-                guard let cur = dataSet.entryForIndex(idx) else { continue }
-
-                // Skip duplicates for performance
-                guard cur.x > prevX else { continue }
-                prevX = cur.x
-
-                if maxGap > 0, cur.x - prevEntry.x > maxGap {
-                    // Draw dashed hint for gaps (handled separately below for better performance)
-                    path.addLine(to: CGPoint(x: CGFloat(cur.x),
-                                             y: CGFloat(cur.y * phaseY)))
-                } else {
-                    path.addLine(to: CGPoint(x: CGFloat(cur.x),
-                                             y: CGFloat(cur.y * phaseY)))
-                }
-
-                prevEntry = cur
+        var currentStartIdx = drawStartIdx
+        for idx in stride(from: drawStartIdx + 1, through: drawEndIdx, by: 1) {
+            guard let e1 = dataSet.entryForIndex(idx - 1),
+                  let e2 = dataSet.entryForIndex(idx) else { continue }
+            let gap = e2.x - e1.x
+            if maxGap > 0 && gap > maxGap {
+                segments.append((currentStartIdx, idx - 1))
+                currentStartIdx = idx
             }
-
-            // Close the path to baseline and back
-            path.addLine(to: CGPoint(x: CGFloat(lastEntry.x), y: baselineY))
-            path.addLine(to: CGPoint(x: CGFloat(firstEntry.x), y: baselineY))
-            path.closeSubpath()
-
-            // Transform only once
-            var m = toPixel
-            guard let transformed = path.copy(using: &m) else { return path }
-            return transformed
+        }
+        if currentStartIdx <= drawEndIdx {
+            segments.append((currentStartIdx, drawEndIdx))
         }
 
-        // ──────────────────────────────
-        // 2. Draw fills using clipping regions (only when needed)
-        // ──────────────────────────────
-        if dataSet.isDrawFilledEnabled {
+        // Build filled paths for continuous segments (excluding lone points)
+        var filledPaths: [CGPath] = []
+        filledPaths.reserveCapacity(segments.count) // Precise capacity
 
-            // Draw alert regions (above upper and below lower)
-            if (upperInAlert || lowerInAlert) {
+        for (startIdx, endIdx) in segments where startIdx < endIdx {
+            let path = generateFilledPath(dataSet: dataSet, startIndex: startIdx, endIndex: endIdx)
+            var m = toPixel
+            if let transformed = path.copy(using: &m) {
+                filledPaths.append(transformed)
+            }
+        }
+
+        // Draw fills with clipping for continuous segments
+        if dataSet.isDrawFilledEnabled && !filledPaths.isEmpty {
+            // Draw alert regions
+            if upperInAlert || lowerInAlert {
                 context.saveGState()
+                let alertClipPath = CGMutablePath()
 
-                // Create unified alert clipping region when possible
-                if upperInAlert && lowerInAlert {
-                    let aboveClipRect = CGRect(x: extendedLeft,
-                                              y: viewPortHandler.contentTop,
-                                              width: extendedWidth,
-                                              height: y_upper_pixel - viewPortHandler.contentTop)
-
-                    let belowClipRect = CGRect(x: extendedLeft,
-                                              y: y_lower_pixel,
-                                              width: extendedWidth,
-                                              height: viewPortHandler.contentBottom - y_lower_pixel)
-
-                    // Create combined path for both alert regions
-                    if aboveClipRect.height > 0 && belowClipRect.height > 0 {
-                        let combinedClipPath = CGMutablePath()
-                        combinedClipPath.addRect(aboveClipRect)
-                        combinedClipPath.addRect(belowClipRect)
-                        context.addPath(combinedClipPath)
-                        context.clip()
-
-                        // Single draw call for both regions
-                        if let fill = dataSet.fill {
-                            drawFilledPath(context: context,
-                                          path: fullFillPath,
-                                          fill: fill,
-                                          fillAlpha: dataSet.fillAlpha)
-                        } else {
-                            drawFilledPath(context: context,
-                                          path: fullFillPath,
-                                          fillColor: alertColor,
-                                          fillAlpha: dataSet.fillAlpha)
-                        }
-                    }
-                } else {
-                    // Only one threshold - simpler case
-                    let alertClipRect: CGRect
-                    if upperInAlert {
-                        alertClipRect = CGRect(x: extendedLeft,
-                                              y: viewPortHandler.contentTop,
-                                              width: extendedWidth,
-                                              height: y_upper_pixel - viewPortHandler.contentTop)
-                    } else {
-                        alertClipRect = CGRect(x: extendedLeft,
-                                              y: y_lower_pixel,
-                                              width: extendedWidth,
-                                              height: viewPortHandler.contentBottom - y_lower_pixel)
-                    }
-
-                    if alertClipRect.height > 0 {
-                        context.clip(to: alertClipRect)
-                        if let fill = dataSet.fill {
-                            drawFilledPath(context: context,
-                                          path: fullFillPath,
-                                          fill: fill,
-                                          fillAlpha: dataSet.fillAlpha)
-                        } else {
-                            drawFilledPath(context: context,
-                                          path: fullFillPath,
-                                          fillColor: alertColor,
-                                          fillAlpha: dataSet.fillAlpha)
-                        }
+                // Add upper alert region to clip path
+                if upperInAlert {
+                    let aboveClipRect = CGRect(x: extendedLeft, y: viewPortHandler.contentTop,
+                                              width: extendedWidth, height: y_upper_pixel - viewPortHandler.contentTop)
+                    if aboveClipRect.height > 0 {
+                        alertClipPath.addRect(aboveClipRect)
                     }
                 }
 
+                // Add lower alert region to clip path
+                if lowerInAlert {
+                    let belowClipRect = CGRect(x: extendedLeft, y: y_lower_pixel,
+                                              width: extendedWidth, height: viewPortHandler.contentBottom - y_lower_pixel)
+                    if belowClipRect.height > 0 {
+                        alertClipPath.addRect(belowClipRect)
+                    }
+                }
+
+                // Draw alert fills if we have clip regions
+                if !alertClipPath.isEmpty {
+                    context.addPath(alertClipPath)
+                    context.clip()
+                    for path in filledPaths {
+                        if let fill = dataSet.fill {
+                            drawFilledPath(context: context, path: path, fill: fill, fillAlpha: dataSet.fillAlpha)
+                        } else {
+                            drawFilledPath(context: context, path: path, fillColor: alertColor, fillAlpha: dataSet.fillAlpha)
+                        }
+                    }
+                }
                 context.restoreGState()
             }
 
             // Draw normal region
-            if (upperInAlert && lowerInAlert) || (upperInAlert || lowerInAlert) {
-                context.saveGState()
+            context.saveGState()
+            let normalClipRect: CGRect
+            if upperInAlert && lowerInAlert {
+                normalClipRect = CGRect(x: extendedLeft, y: y_upper_pixel,
+                                       width: extendedWidth, height: y_lower_pixel - y_upper_pixel)
+            } else if upperInAlert {
+                normalClipRect = CGRect(x: extendedLeft, y: y_upper_pixel,
+                                       width: extendedWidth, height: viewPortHandler.contentBottom - y_upper_pixel)
+            } else if lowerInAlert {
+                normalClipRect = CGRect(x: extendedLeft, y: viewPortHandler.contentTop,
+                                       width: extendedWidth, height: y_lower_pixel - viewPortHandler.contentTop)
+            } else {
+                normalClipRect = viewPortHandler.contentRect
+            }
 
-                let normalClipRect: CGRect
-                if upperInAlert && lowerInAlert {
-                    // Between thresholds
-                    normalClipRect = CGRect(x: extendedLeft,
-                                           y: y_upper_pixel,
-                                           width: extendedWidth,
-                                           height: y_lower_pixel - y_upper_pixel)
-                } else if upperInAlert {
-                    // Below upper threshold
-                    normalClipRect = CGRect(x: extendedLeft,
-                                           y: y_upper_pixel,
-                                           width: extendedWidth,
-                                           height: viewPortHandler.contentBottom - y_upper_pixel)
-                } else {
-                    // Above lower threshold
-                    normalClipRect = CGRect(x: extendedLeft,
-                                           y: viewPortHandler.contentTop,
-                                           width: extendedWidth,
-                                           height: y_lower_pixel - viewPortHandler.contentTop)
-                }
-
-                if normalClipRect.height > 0 {
-                    context.clip(to: normalClipRect)
+            if normalClipRect.height > 0 {
+                context.clip(to: normalClipRect)
+                for path in filledPaths {
                     if let fill = dataSet.fill {
-                        drawFilledPath(context: context,
-                                      path: fullFillPath,
-                                      fill: fill,
-                                      fillAlpha: dataSet.fillAlpha)
+                        drawFilledPath(context: context, path: path, fill: fill, fillAlpha: dataSet.fillAlpha)
                     } else {
-                        drawFilledPath(context: context,
-                                      path: fullFillPath,
-                                      fillColor: normalColor,
-                                      fillAlpha: dataSet.fillAlpha)
+                        drawFilledPath(context: context, path: path, fillColor: normalColor, fillAlpha: dataSet.fillAlpha)
                     }
                 }
-
-                context.restoreGState()
             }
+            context.restoreGState()
         }
 
-        // ──────────────────────────────
-        // 3. Draw threshold lines (performance: use single call when possible)
-        // ──────────────────────────────
+        // Handle lone points - completely separate vertical line segments
+        for (startIdx, endIdx) in segments where startIdx == endIdx {
+            drawLonePoint(
+                context: context,
+                dataSet: dataSet,
+                index: startIdx,
+                baselineY: baselineY,
+                upper: upper,
+                lower: lower,
+                upperInAlert: upperInAlert,
+                lowerInAlert: lowerInAlert,
+                alertColor: alertColor,
+                normalColor: normalColor,
+                phaseY: phaseY,
+                toPixel: toPixel
+            )
+        }
+
+        // Draw threshold lines
         if upperInAlert || lowerInAlert {
             context.saveGState()
             context.setStrokeColor(alertColor.cgColor)
             context.setLineWidth(1.0)
 
-            // Draw both lines in a single stroke operation if possible
-            if upperInAlert && lowerInAlert &&
-               viewPortHandler.isInBoundsY(y_upper_pixel) &&
-               viewPortHandler.isInBoundsY(y_lower_pixel) {
-
-                let linesPath = CGMutablePath()
-                linesPath.move(to: CGPoint(x: extendedLeft, y: y_upper_pixel))
-                linesPath.addLine(to: CGPoint(x: extendedRight, y: y_upper_pixel))
-                linesPath.move(to: CGPoint(x: extendedLeft, y: y_lower_pixel))
-                linesPath.addLine(to: CGPoint(x: extendedRight, y: y_lower_pixel))
-                context.addPath(linesPath)
-                context.strokePath()
-            } else {
-                // Draw lines individually
-                if upperInAlert && viewPortHandler.isInBoundsY(y_upper_pixel) {
-                    context.move(to: CGPoint(x: extendedLeft, y: y_upper_pixel))
-                    context.addLine(to: CGPoint(x: extendedRight, y: y_upper_pixel))
-                    context.strokePath()
-                }
-
-                if lowerInAlert && viewPortHandler.isInBoundsY(y_lower_pixel) {
-                    context.move(to: CGPoint(x: extendedLeft, y: y_lower_pixel))
-                    context.addLine(to: CGPoint(x: extendedRight, y: y_lower_pixel))
-                    context.strokePath()
-                }
+            if upperInAlert && viewPortHandler.isInBoundsY(y_upper_pixel) {
+                context.move(to: CGPoint(x: extendedLeft, y: y_upper_pixel))
+                context.addLine(to: CGPoint(x: extendedRight, y: y_upper_pixel))
             }
 
+            if lowerInAlert && viewPortHandler.isInBoundsY(y_lower_pixel) {
+                context.move(to: CGPoint(x: extendedLeft, y: y_lower_pixel))
+                context.addLine(to: CGPoint(x: extendedRight, y: y_lower_pixel))
+            }
+
+            context.strokePath()
             context.restoreGState()
         }
 
-        // ──────────────────────────────
-        // 4. Efficiently draw line segments
-        // ──────────────────────────────
-
-        // Reusable arrays for segment drawing (avoid repeated allocations)
+        // Draw connected line segments
         var normalSegments: [CGPoint] = []
         var alertSegments: [CGPoint] = []
-        normalSegments.reserveCapacity(50) // Pre-allocate reasonable capacity
-        alertSegments.reserveCapacity(50)
+        // More precise capacity estimation based on actual data points
+        let estimatedPointCount = min(100, (drawEndIdx - drawStartIdx) * 2)
+        normalSegments.reserveCapacity(estimatedPointCount)
+        alertSegments.reserveCapacity(estimatedPointCount)
 
-        // Pre-calculate segments and categorize by color
-        autoreleasepool {
-            for idx in stride(from: drawStartIdx, through: drawEndIdx - 1, by: 1) {
-                guard let e1 = dataSet.entryForIndex(idx),
-                      let e2 = dataSet.entryForIndex(idx + 1) else {
-                    continue
-                }
+        for idx in stride(from: drawStartIdx, through: drawEndIdx - 1, by: 1) {
+            guard let e1 = dataSet.entryForIndex(idx),
+                  let e2 = dataSet.entryForIndex(idx + 1) else { continue }
 
-                // Skip large gaps (will be handled by dashed lines)
-                if maxGap > 0, (e2.x - e1.x) > maxGap {
-                    continue
-                }
+            if maxGap > 0, (e2.x - e1.x) > maxGap { continue } // Skip points with too large gaps
 
-                // Convert to screen points
-                let p1 = CGPoint(x: CGFloat(e1.x), y: CGFloat(e1.y * phaseY)).applying(toPixel)
-                let p2 = CGPoint(x: CGFloat(e2.x), y: CGFloat(e2.y * phaseY)).applying(toPixel)
+            // Convert data points to pixel coordinates
+            let p1 = CGPoint(x: CGFloat(e1.x), y: CGFloat(e1.y * phaseY)).applying(toPixel)
+            let p2 = CGPoint(x: CGFloat(e2.x), y: CGFloat(e2.y * phaseY)).applying(toPixel)
 
-                // Skip if completely outside viewport (with margin)
-                let minX = min(p1.x, p2.x)
-                let maxX = max(p1.x, p2.x)
-                if maxX < extendedLeft || minX > extendedRight {
-                    continue
-                }
+            // Skip points outside the visible area
+            let minX = min(p1.x, p2.x)
+            let maxX = max(p1.x, p2.x)
+            if maxX < extendedLeft || minX > extendedRight { continue }
 
-                // Check alert status
-                let a1 = (upperInAlert && e1.y > upper) || (lowerInAlert && e1.y < lower)
-                let a2 = (upperInAlert && e2.y > upper) || (lowerInAlert && e2.y < lower)
+            // Check if points are in alert ranges
+            let a1 = isInAlertRange(e1.y)
+            let a2 = isInAlertRange(e2.y)
 
-                // Same state - add to appropriate segment array
-                if a1 == a2 {
-                    if a1 {
-                        alertSegments.append(p1)
-                        alertSegments.append(p2)
-                    } else {
-                        normalSegments.append(p1)
-                        normalSegments.append(p2)
-                    }
-                    continue
-                }
-
-                // If crossing threshold, split the segment
+            if a1 && a2 {
+                // Both points in alert range
+                alertSegments.append(p1)
+                alertSegments.append(p2)
+            } else if !a1 && !a2 {
+                // Both points in normal range
+                normalSegments.append(p1)
+                normalSegments.append(p2)
+            } else {
+                // Handle transition between alert and normal ranges with intersection point
+                // Calculate which threshold is being crossed
                 var limitY: Double = .nan
-                if upperInAlert && (e1.y - upper) * (e2.y - upper) < 0 {
-                    limitY = upper
-                } else if lowerInAlert && (e1.y - lower) * (e2.y - lower) < 0 {
-                    limitY = lower
+
+                // Determine which threshold we're crossing
+                if a1 {
+                    // First point is in alert
+                    if upperInAlert && e1.y > upper {
+                        limitY = upper
+                    } else if lowerInAlert && e1.y < lower {
+                        limitY = lower
+                    }
+                } else {
+                    // Second point is in alert
+                    if upperInAlert && e2.y > upper {
+                        limitY = upper
+                    } else if lowerInAlert && e2.y < lower {
+                        limitY = lower
+                    }
                 }
 
+                // Calculate intersection if we have a valid threshold
                 if limitY.isFinite {
-                    // Calculate intersection
                     let dy = e2.y - e1.y
-                    if abs(dy) >= 1e-6 {  // Avoid division by near-zero
+                    // Use epsilon for floating point comparison
+                    if abs(dy) >= 1e-6 {
                         let t = (limitY - e1.y) / dy
-                        if t > 0 && t < 1 {  // Valid intersection point
-                            let xI = e1.x + t * (e2.x - e1.x)
+                        // Add small epsilon to avoid missing intersections due to floating point precision
+                        let epsilon = 1e-10
+                        if t > 0 - epsilon && t < 1 + epsilon {
+                            // Clamp t to valid range to prevent floating point errors
+                            let tClamped = max(0, min(1, t))
+                            let xI = e1.x + tClamped * (e2.x - e1.x)
                             let pI = CGPoint(x: CGFloat(xI), y: CGFloat(limitY * phaseY)).applying(toPixel)
 
-                            // Add segments with appropriate colors
-                            if (upperInAlert && e1.y > upper) || (lowerInAlert && e1.y < lower) {
+                            if a1 {
+                                // First point is in alert range
                                 alertSegments.append(p1)
                                 alertSegments.append(pI)
                                 normalSegments.append(pI)
                                 normalSegments.append(p2)
                             } else {
+                                // Second point is in alert range
                                 normalSegments.append(p1)
                                 normalSegments.append(pI)
                                 alertSegments.append(pI)
@@ -666,64 +598,252 @@ open class LineChartRenderer: LineRadarRenderer
                     }
                 }
 
-                // Fallback (should rarely happen)
+                // Fallback if intersection calculation fails
                 normalSegments.append(p1)
                 normalSegments.append(p2)
             }
         }
 
-        // Draw segments in batches (more efficient than one-by-one)
+        // Draw normal and alert segments in batches for better performance
+        // Drawing in batches is more efficient than individual line segments
         context.saveGState()
-
-        // Draw normal segments
         if !normalSegments.isEmpty {
             context.setStrokeColor(normalColor.cgColor)
             context.setLineWidth(dataSet.lineWidth)
             context.strokeLineSegments(between: normalSegments)
         }
-
-        // Draw alert segments
         if !alertSegments.isEmpty {
             context.setStrokeColor(alertColor.cgColor)
             context.setLineWidth(dataSet.lineWidth)
             context.strokeLineSegments(between: alertSegments)
         }
-
         context.restoreGState()
 
-        // ──────────────────────────────
-        // 5. Draw dashed lines for gaps (if needed)
-        // ──────────────────────────────
+        // Draw dashed lines for gaps with proper coloring based on alert ranges
         if maxGap > 0 {
-            var dashSegments: [CGPoint] = []
+            drawDashedLinesForGaps(
+                context: context,
+                dataSet: dataSet,
+                drawStartIdx: drawStartIdx,
+                drawEndIdx: drawEndIdx,
+                maxGap: maxGap,
+                upper: upper,
+                lower: lower,
+                upperInAlert: upperInAlert,
+                lowerInAlert: lowerInAlert,
+                alertColor: alertColor,
+                normalColor: normalColor,
+                phaseY: phaseY,
+                toPixel: toPixel,
+                extendedLeft: extendedLeft,
+                extendedRight: extendedRight
+            )
+        }
+    }
 
-            for idx in stride(from: drawStartIdx, to: drawEndIdx, by: 1) {
-                guard let e1 = dataSet.entryForIndex(idx),
-                      let e2 = dataSet.entryForIndex(idx + 1) else { continue }
+    // Helper method to draw lone points with proper coloring
+    private func drawLonePoint(
+        context: CGContext,
+        dataSet: LineChartDataSetProtocol,
+        index: Int,
+        baselineY: CGFloat,
+        upper: Double,
+        lower: Double,
+        upperInAlert: Bool,
+        lowerInAlert: Bool,
+        alertColor: NSUIColor,
+        normalColor: NSUIColor,
+        phaseY: CGFloat,
+        toPixel: CGAffineTransform
+    ) {
+        guard let entry = dataSet.entryForIndex(index) else { return }
 
-                if e2.x - e1.x > maxGap {
-                    let p1 = CGPoint(x: CGFloat(e1.x), y: CGFloat(e1.y * phaseY)).applying(toPixel)
-                    let p2 = CGPoint(x: CGFloat(e2.x), y: CGFloat(e2.y * phaseY)).applying(toPixel)
+        let baseY = baselineY
+        let pointY = CGFloat(entry.y * phaseY)
+        let x = CGFloat(entry.x)
 
-                    // Only add if visible
-                    let minX = min(p1.x, p2.x)
-                    let maxX = max(p1.x, p2.x)
-                    if maxX >= extendedLeft && minX <= extendedRight {
-                        dashSegments.append(p1)
-                        dashSegments.append(p2)
-                    }
+        // Convert to pixel coordinates for drawing
+        let basePoint = CGPoint(x: x, y: baseY).applying(toPixel)
+        let dataPoint = CGPoint(x: x, y: pointY).applying(toPixel)
+
+        // Create intersections where the vertical line crosses thresholds
+        var intersections: [(point: CGPoint, isEnteringAlert: Bool)] = []
+
+        // Check for upper threshold crossing
+        if upperInAlert && ((baseY <= upper && pointY >= upper) || (baseY >= upper && pointY <= upper)) {
+            let upperIntersection = CGPoint(x: x, y: CGFloat(upper)).applying(toPixel)
+            // isEnteringAlert is true when moving from normal to alert zone
+            let entering = baseY <= upper && pointY >= upper
+            intersections.append((upperIntersection, entering))
+        }
+
+        // Check for lower threshold crossing
+        if lowerInAlert && ((baseY <= lower && pointY >= lower) || (baseY >= lower && pointY <= lower)) {
+            let lowerIntersection = CGPoint(x: x, y: CGFloat(lower)).applying(toPixel)
+            // isEnteringAlert is true when moving from normal to alert zone
+            let entering = baseY >= lower && pointY <= lower
+            intersections.append((lowerIntersection, entering))
+        }
+
+        // Sort intersections by y-coordinate based on line direction
+        if basePoint.y <= dataPoint.y {
+            // Line moving up - sort ascending
+            intersections.sort { $0.point.y < $1.point.y }
+        } else {
+            // Line moving down - sort descending
+            intersections.sort { $0.point.y > $1.point.y }
+        }
+
+        // Determine if starting point is in alert zone
+        let isBaseInAlert = (upperInAlert && baseY > upper) || (lowerInAlert && baseY < lower)
+
+        if intersections.isEmpty {
+            // No threshold crossings - draw single line
+            let color = isBaseInAlert ? alertColor : normalColor
+            drawLine(context: context, start: basePoint, stop: dataPoint,
+                    fillColor: color, fillAlpha: 1.0, lineWidth: dataSet.lineWidth)
+        } else {
+            // Draw segments with transitions at threshold crossings
+            var prevPoint = basePoint
+            var isInAlert = isBaseInAlert
+
+            for (intersection, entering) in intersections {
+                // Draw segment to this intersection
+                let color = isInAlert ? alertColor : normalColor
+                drawLine(context: context, start: prevPoint, stop: intersection,
+                        fillColor: color, fillAlpha: 1.0, lineWidth: dataSet.lineWidth)
+
+                // Update for next segment
+                prevPoint = intersection
+                isInAlert = entering
+            }
+
+            // Draw final segment from last intersection to data point
+            let finalColor = isInAlert ? alertColor : normalColor
+            drawLine(context: context, start: prevPoint, stop: dataPoint,
+                    fillColor: finalColor, fillAlpha: 1.0, lineWidth: dataSet.lineWidth)
+        }
+
+        // Draw circle at the data point with proper color
+        let pointColor = (upperInAlert && entry.y > upper) || (lowerInAlert && entry.y < lower) ?
+                        alertColor : normalColor
+        drawCircleAtPoint(context: context, center: dataPoint, radius: dataSet.circleRadius,
+                         fillColor: pointColor, drawHole: dataSet.isDrawCircleHoleEnabled)
+    }
+
+    // Helper method for drawing dashed lines with proper color transitions
+    private func drawDashedLinesForGaps(
+        context: CGContext,
+        dataSet: LineChartDataSetProtocol,
+        drawStartIdx: Int,
+        drawEndIdx: Int,
+        maxGap: Double,
+        upper: Double,
+        lower: Double,
+        upperInAlert: Bool,
+        lowerInAlert: Bool,
+        alertColor: NSUIColor,
+        normalColor: NSUIColor,
+        phaseY: CGFloat,
+        toPixel: CGAffineTransform,
+        extendedLeft: CGFloat,
+        extendedRight: CGFloat
+    ) {
+        // Epsilon value for floating point comparisons
+        let epsilon: Double = 1e-10
+
+        for idx in stride(from: drawStartIdx, to: drawEndIdx, by: 1) {
+            guard let e1 = dataSet.entryForIndex(idx),
+                  let e2 = dataSet.entryForIndex(idx + 1) else { continue }
+
+            // Only process gaps larger than maxGap
+            if e2.x - e1.x <= maxGap { continue }
+
+            let p1 = CGPoint(x: CGFloat(e1.x), y: CGFloat(e1.y * phaseY)).applying(toPixel)
+            let p2 = CGPoint(x: CGFloat(e2.x), y: CGFloat(e2.y * phaseY)).applying(toPixel)
+
+            // Skip points outside visible area for performance
+            let minX = min(p1.x, p2.x)
+            let maxX = max(p1.x, p2.x)
+            if maxX < extendedLeft || minX > extendedRight { continue }
+
+            let y1 = e1.y
+            let y2 = e2.y
+
+            // Find all threshold crossings
+            var intersections: [(Double, Bool)] = [] // (t parameter, isEnteringNormalZone)
+
+            // Add crossing with upper threshold if it exists
+            if upperInAlert && abs(y2 - y1) > epsilon {
+                let t = (upper - y1) / (y2 - y1)
+                // Use epsilon to handle floating point precision
+                if t >= 0-epsilon && t <= 1+epsilon {
+                    // Clamp t to valid range
+                    let tClamped = max(0, min(1, t))
+                    // isEntering: true means entering normal zone from alert zone
+                    let isEnteringNormal = y1 > upper && y2 <= upper
+                    intersections.append((tClamped, isEnteringNormal))
                 }
             }
 
-            if !dashSegments.isEmpty {
-                context.saveGState()
-                context.setLineDash(phase: 0, lengths: [1, 2])
-                context.setLineWidth(dataSet.lineWidth)
-                context.setStrokeColor(normalColor.cgColor)
-                context.strokeLineSegments(between: dashSegments)
-                context.restoreGState()
+            // Add crossing with lower threshold if it exists
+            if lowerInAlert && abs(y2 - y1) > epsilon {
+                let t = (lower - y1) / (y2 - y1)
+                if t >= 0-epsilon && t <= 1+epsilon {
+                    // Clamp t to valid range
+                    let tClamped = max(0, min(1, t))
+                    // isEntering: true means entering normal zone from alert zone
+                    let isEnteringNormal = y1 < lower && y2 >= lower
+                    intersections.append((tClamped, isEnteringNormal))
+                }
+            }
+
+            // Determine alert status of first point
+            let isPoint1Alert = (upperInAlert && y1 > upper) || (lowerInAlert && y1 < lower)
+
+            if intersections.isEmpty {
+                // No threshold crossings
+                let color = isPoint1Alert ? alertColor : normalColor
+                drawDashedLine(context: context, from: p1, to: p2, color: color, lineWidth: dataSet.lineWidth)
+            } else {
+                // Sort intersections by t parameter (distance along line)
+                let sortedIntersections = intersections.sorted { $0.0 < $1.0 }
+
+                var prevPoint = p1
+                var isInAlert = isPoint1Alert
+
+                // Draw each segment with proper color
+                for (t, isEnteringNormalZone) in sortedIntersections {
+                    let xI = e1.x + t * (e2.x - e1.x)
+                    let yI = y1 + t * (y2 - y1)
+                    let intersectionPoint = CGPoint(x: CGFloat(xI), y: CGFloat(yI * phaseY)).applying(toPixel)
+
+                    let segmentColor = isInAlert ? alertColor : normalColor
+                    drawDashedLine(context: context, from: prevPoint, to: intersectionPoint,
+                                  color: segmentColor, lineWidth: dataSet.lineWidth)
+
+                    // Update for next segment
+                    prevPoint = intersectionPoint
+                    isInAlert = isEnteringNormalZone ? false : true
+                }
+
+                // Draw final segment
+                let finalColor = isInAlert ? alertColor : normalColor
+                drawDashedLine(context: context, from: prevPoint, to: p2,
+                              color: finalColor, lineWidth: dataSet.lineWidth)
             }
         }
+    }
+
+    // Helper function for drawing dashed lines - moved outside main method for reuse
+    private func drawDashedLine(context: CGContext, from: CGPoint, to: CGPoint,
+                               color: NSUIColor, lineWidth: CGFloat) {
+        context.saveGState()
+        context.setLineDash(phase: 0, lengths: [1, 2])
+        context.setLineWidth(lineWidth)
+        context.setStrokeColor(color.cgColor)
+        context.strokeLineSegments(between: [from, to])
+        context.restoreGState()
     }
 
     // Draws the original single‑colour chart when no limits are set.
