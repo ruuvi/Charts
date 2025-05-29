@@ -472,21 +472,23 @@ open class LineChartRenderer: LineRadarRenderer
         }
 
         // Handle lone points - completely separate vertical line segments
-        for (startIdx, endIdx) in segments where startIdx == endIdx {
-            drawLonePoint(
-                context: context,
-                dataSet: dataSet,
-                index: startIdx,
-                baselineY: baselineY,
-                upper: upper,
-                lower: lower,
-                upperInAlert: upperInAlert,
-                lowerInAlert: lowerInAlert,
-                alertColor: alertColor,
-                normalColor: normalColor,
-                phaseY: phaseY,
-                toPixel: toPixel
-            )
+        if dataSet.entryCount > 1 {
+            for (startIdx, endIdx) in segments where startIdx == endIdx {
+                drawLonePoint(
+                    context: context,
+                    dataSet: dataSet,
+                    index: startIdx,
+                    baselineY: baselineY,
+                    upper: upper,
+                    lower: lower,
+                    upperInAlert: upperInAlert,
+                    lowerInAlert: lowerInAlert,
+                    alertColor: alertColor,
+                    normalColor: normalColor,
+                    phaseY: phaseY,
+                    toPixel: toPixel
+                )
+            }
         }
 
         // Draw threshold lines
