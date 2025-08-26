@@ -147,11 +147,18 @@ open class LineChartDataSet: LineRadarChartDataSet, LineChartDataSetProtocol
     /// Line cap type, default is CGLineCap.Butt
     open var lineCapType = CGLineCap.butt
 
+    /// Whether gaps between points should be rendered in the line.
+    /// If True, maximumGapBetweenPoints will be applied to rended the dashed line for the gap.
+    open var showGapBetweenPoints = true
+
     /// The maximum gap (in x-value distance) above which the line should break.
     open var maximumGapBetweenPoints: CGFloat = 0.0
 
     /// Whether alert is enabled and the alert range should be drawn.
     open var hasAlertRange = false
+
+    /// Whether the horizontal alert threshold line should be drawn.
+    open var drawAlertRangeThresholdLine = true
 
     /// Optional lower bound – any value **below** this is rendered with `alertColor`.
     open var lowerAlertLimit: CGFloat = 0
@@ -193,10 +200,12 @@ open class LineChartDataSet: LineRadarChartDataSet, LineChartDataSetProtocol
         copy.lineDashPhase = lineDashPhase
         copy.lineDashLengths = lineDashLengths
         copy.lineCapType = lineCapType
+        copy.showGapBetweenPoints = showGapBetweenPoints
         copy.maximumGapBetweenPoints = maximumGapBetweenPoints
         copy.drawCirclesEnabled = drawCirclesEnabled
         copy.drawCircleHoleEnabled = drawCircleHoleEnabled
         copy.hasAlertRange = hasAlertRange
+        copy.drawAlertRangeThresholdLine = drawAlertRangeThresholdLine
         copy.lowerAlertLimit = lowerAlertLimit
         copy.upperAlertLimit = upperAlertLimit
         copy.alertColor = alertColor

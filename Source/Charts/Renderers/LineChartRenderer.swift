@@ -381,7 +381,7 @@ open class LineChartRenderer: LineRadarRenderer
             guard let e1 = dataSet.entryForIndex(idx - 1),
                   let e2 = dataSet.entryForIndex(idx) else { continue }
             let gap = e2.x - e1.x
-            if maxGap > 0 && gap > maxGap {
+            if dataSet.showGapBetweenPoints && maxGap > 0 && gap > maxGap {
                 segments.append((currentStartIdx, idx - 1))
                 currentStartIdx = idx
             }
@@ -492,23 +492,25 @@ open class LineChartRenderer: LineRadarRenderer
         }
 
         // Draw threshold lines
-        if upperInAlert || lowerInAlert {
-            context.saveGState()
-            context.setStrokeColor(alertColor.cgColor)
-            context.setLineWidth(1.0)
+        if dataSet.drawAlertRangeThresholdLine {
+            if upperInAlert || lowerInAlert {
+                context.saveGState()
+                context.setStrokeColor(alertColor.cgColor)
+                context.setLineWidth(1.0)
 
-            if upperInAlert && viewPortHandler.isInBoundsY(y_upper_pixel) {
-                context.move(to: CGPoint(x: extendedLeft, y: y_upper_pixel))
-                context.addLine(to: CGPoint(x: extendedRight, y: y_upper_pixel))
+                if upperInAlert && viewPortHandler.isInBoundsY(y_upper_pixel) {
+                    context.move(to: CGPoint(x: extendedLeft, y: y_upper_pixel))
+                    context.addLine(to: CGPoint(x: extendedRight, y: y_upper_pixel))
+                }
+
+                if lowerInAlert && viewPortHandler.isInBoundsY(y_lower_pixel) {
+                    context.move(to: CGPoint(x: extendedLeft, y: y_lower_pixel))
+                    context.addLine(to: CGPoint(x: extendedRight, y: y_lower_pixel))
+                }
+
+                context.strokePath()
+                context.restoreGState()
             }
-
-            if lowerInAlert && viewPortHandler.isInBoundsY(y_lower_pixel) {
-                context.move(to: CGPoint(x: extendedLeft, y: y_lower_pixel))
-                context.addLine(to: CGPoint(x: extendedRight, y: y_lower_pixel))
-            }
-
-            context.strokePath()
-            context.restoreGState()
         }
 
         // Draw connected line segments
@@ -523,7 +525,8 @@ open class LineChartRenderer: LineRadarRenderer
             guard let e1 = dataSet.entryForIndex(idx),
                   let e2 = dataSet.entryForIndex(idx + 1) else { continue }
 
-            if maxGap > 0, (e2.x - e1.x) > maxGap { continue } // Skip points with too large gaps
+            if dataSet.showGapBetweenPoints &&
+                maxGap > 0, (e2.x - e1.x) > maxGap { continue } // Skip points with too large gaps
 
             // Convert data points to pixel coordinates
             let p1 = CGPoint(x: CGFloat(e1.x), y: CGFloat(e1.y * phaseY)).applying(toPixel)
@@ -622,7 +625,7 @@ open class LineChartRenderer: LineRadarRenderer
         context.restoreGState()
 
         // Draw dashed lines for gaps with proper coloring based on alert ranges
-        if maxGap > 0 {
+        if dataSet.showGapBetweenPoints && maxGap > 0 {
             drawDashedLinesForGaps(
                 context: context,
                 dataSet: dataSet,
@@ -880,7 +883,7 @@ open class LineChartRenderer: LineRadarRenderer
             guard let cur = dataSet.entryForIndex(idx) else { continue }
 
             let gap = cur.x - prevEntry.x
-            if maxGap > 0, gap > maxGap {
+            if dataSet.showGapBetweenPoints && maxGap > 0, gap > maxGap {
                 // dashed hint
                 context.saveGState()
                 context.setLineDash(phase: 0, lengths: [1, 2])
@@ -948,7 +951,7 @@ open class LineChartRenderer: LineRadarRenderer
             else { continue }
 
             let gap = e2.x - e1.x
-            let breakInData = (maximumGap > 0.0 && gap > maximumGap)
+            let breakInData = (dataSet.showGapBetweenPoints && maximumGap > 0.0 && gap > maximumGap)
 
             if breakInData || (index - currentStartIndex >= indexInterval) || (index == endIndex) {
                 // currentEndIndex is the last valid index of this segment

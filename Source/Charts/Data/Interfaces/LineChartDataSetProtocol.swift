@@ -89,8 +89,15 @@ public protocol LineChartDataSetProtocol: LineRadarChartDataSetProtocol
     /// Line cap type, default is CGLineCap.Butt
     var lineCapType: CGLineCap { get set }
 
+    /// Whether gaps between points should be rendered in the line.
+    /// If True, maximumGapBetweenPoints will be applied to rended the dashed line for the gap.
+    var showGapBetweenPoints: Bool { get set }
+
     /// The maximum gap (in x-value distance) above which the line should break.
     var maximumGapBetweenPoints: CGFloat { get set}
+
+    /// Whether the horizontal alert threshold line should be drawn.
+    var drawAlertRangeThresholdLine: Bool { get set }
 
     /// Whether alert is enabled and the alert range should be drawn.
     var hasAlertRange: Bool { get set }
